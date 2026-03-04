@@ -594,7 +594,7 @@ void CBgDraw::OnStateChange(int NewState, int OldState)
 	if(OldState == IClient::STATE_ONLINE || OldState == IClient::STATE_DEMOPLAYBACK)
 	{
 		if(g_Config.m_TcBgDrawAutoSaveLoad > 0)
-			Save(nullptr, true);
+			Save(nullptr, false);
 	}
 	Reset();
 	m_NextAutoSave = AUTO_SAVE_INTERVAL;
