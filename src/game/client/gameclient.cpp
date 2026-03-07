@@ -710,8 +710,8 @@ void CGameClient::OnReset()
 	m_GameWorld.m_WorldConfig.m_InfiniteAmmo = true;
 	m_PredictedWorld.CopyWorld(&m_GameWorld);
 	m_PrevPredictedWorld.CopyWorld(&m_PredictedWorld);
-	m_RegularPredictedWorld.CopyWorld(&m_PredictedWorld);
-	m_PrevRegularPredictedWorld.CopyWorld(&m_PredictedWorld);
+	m_RegularPredictedWorld.CopyWorldClean(&m_PredictedWorld);
+	m_PrevRegularPredictedWorld.CopyWorldClean(&m_PredictedWorld);
 
 	m_vSnapEntities.clear();
 
@@ -2664,7 +2664,7 @@ void CGameClient::OnPredict()
 		}
 
 		if(Tick == FinalTickRegular)
-			m_PrevRegularPredictedWorld.CopyWorld(&m_PredictedWorld);
+			m_PrevRegularPredictedWorld.CopyWorldClean(&m_PredictedWorld);
 
 		// optionally allow some movement in freeze by not predicting freeze the last one to two ticks
 		if(g_Config.m_ClPredictFreeze == 2 && Client()->PredGameTick(g_Config.m_ClDummy) - 1 - Client()->PredGameTick(g_Config.m_ClDummy) % 2 <= Tick)
@@ -2726,7 +2726,7 @@ void CGameClient::OnPredict()
 		m_PredictedWorld.m_WorldConfig.m_PredictEvents = TempPredEventState;
 
 		if(Tick == FinalTickRegular)
-			m_RegularPredictedWorld.CopyWorld(&m_PredictedWorld);
+			m_RegularPredictedWorld.CopyWorldClean(&m_PredictedWorld);
 
 		// fetch the current characters
 		if(Tick == FinalTickSelf)
