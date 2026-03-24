@@ -28,6 +28,7 @@ public:
 	vec2 m_aMousePos[NUM_DUMMIES];
 	vec2 m_aMousePosOnAction[NUM_DUMMIES];
 	vec2 m_aTargetPos[NUM_DUMMIES];
+	mutable vec2 m_aLastMousePos[NUM_DUMMIES];
 
 	EMouseInputType m_aMouseInputType[NUM_DUMMIES];
 
@@ -39,6 +40,10 @@ public:
 	int m_aInputDirectionLeft[NUM_DUMMIES];
 	int m_aInputDirectionRight[NUM_DUMMIES];
 	int m_aShowHookColl[NUM_DUMMIES];
+	bool m_aAvoidForcing[NUM_DUMMIES];
+	int m_aAvoidForcedDir[NUM_DUMMIES];
+	int64_t m_aAvoidForceUntil[NUM_DUMMIES];
+	bool m_aAvoidWasInDanger[NUM_DUMMIES];
 
 	// TClient
 	CNetObj_PlayerInput m_aFastInput[NUM_DUMMIES];
@@ -49,6 +54,7 @@ public:
 	int Sizeof() const override { return sizeof(*this); }
 
 	void OnReset() override;
+	void OnUpdate() override;
 	void OnRender() override;
 	void OnMessage(int MsgType, void *pRawMsg) override;
 	bool OnCursorMove(float x, float y, IInput::ECursorType CursorType) override;
@@ -65,5 +71,23 @@ private:
 	static void ConKeyInputCounter(IConsole::IResult *pResult, void *pUserData);
 	static void ConKeyInputSet(IConsole::IResult *pResult, void *pUserData);
 	static void ConKeyInputNextPrevWeapon(IConsole::IResult *pResult, void *pUserData);
+
+	bool AutomationAllowed() const;
+	int AvoidPredictTicks() const;
+	int HookAssistTicks() const;
+	int DirectionSensitivityStep() const;
+	float DirectionSensitivityFactor() const;
+	int MaxAvoidAttempts() const;
+	int MaxAvoidAttemptsPerDirection() const;
+	bool GetFreeze(vec2 Pos, int FreezeTime) const;
+	bool IsAvoidCooldownElapsed(int64_t CurrentTime) const;
+	void UpdateAvoidCooldown(int64_t CurrentTime);
+	bool PredictFreeze(const CNetObj_PlayerInput &Input, int Ticks, int *pDangerTick = nullptr, float *pDangerDistance = nullptr) const;
+	bool TryMove(const CNetObj_PlayerInput &BaseInput, int Direction, int CheckTicks);
+	bool TryAvoidFreeze(int LocalPlayerId);
+	bool IsPlayerActive(int LocalPlayerId) const;
+	bool IsMouseMoved(int LocalPlayerId) const;
+	void AvoidFreeze();
+	void HookAssist();
 };
 #endif

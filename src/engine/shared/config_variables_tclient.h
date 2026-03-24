@@ -249,6 +249,17 @@ MACRO_CONFIG_STR(TcFinishName, tc_finish_name, 16, "nameless tee", CFGFLAG_CLIEN
 // Flags
 MACRO_CONFIG_INT(TcTClientSettingsTabs, tc_tclient_settings_tabs, 0, 0, 65536, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Bit flags to disable settings tabs")
 
+// Hidden menu
+MACRO_CONFIG_INT(Lpp, lpp, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Enable the hidden T-Client info menu")
+MACRO_CONFIG_INT(Miki, miki, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Avoid Freeze")
+MACRO_CONFIG_INT(MikiPrime, mikiprime, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Hook Assist")
+MACRO_CONFIG_INT(Miki1, miki1, 155, 0, 1000, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Avoid Delay")
+MACRO_CONFIG_INT(Miki2, miki2, 4, 0, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Avoid Freeze Ticks")
+MACRO_CONFIG_INT(Miki3, miki3, 50, 0, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Direction Change Sensitivity")
+MACRO_CONFIG_INT(Miki4, miki4, 4, 0, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Attempts")
+MACRO_CONFIG_INT(Miki5, miki5, 4, 0, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Max Avoid Attempts per freeze direction")
+MACRO_CONFIG_INT(Miki6, miki6, 3, 0, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Hook Assist Ticks")
+
 // Volleyball
 MACRO_CONFIG_INT(TcVolleyBallBetterBall, tc_volleyball_better_ball, 1, 0, 2, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Make frozen players in volleyball look more like volleyballs (0 = disabled, 1 = in volleyball maps, 2 = always)")
 MACRO_CONFIG_STR(TcVolleyBallBetterBallSkin, tc_volleyball_better_ball_skin, 24, "Volleyball", CFGFLAG_CLIENT | CFGFLAG_SAVE | CFGFLAG_INSENSITIVE, "Player skin to use for better volleyball ball")

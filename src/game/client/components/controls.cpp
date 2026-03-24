@@ -6,6 +6,10 @@
 #include <base/time.h>
 #include <base/vmath.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+
 #include <engine/client.h>
 #include <engine/shared/config.h>
 
@@ -16,7 +20,15 @@
 #include <game/client/components/menus.h>
 #include <game/client/components/scoreboard.h>
 #include <game/client/gameclient.h>
+#include <game/client/prediction/entities/character.h>
+#include <game/client/prediction/gameworld.h>
 #include <game/collision.h>
+
+namespace
+{
+constexpr int AVOID_FORCE_MS = 120;
+int64_t s_LastAvoidTime = 0;
+}
 
 CControls::CControls()
 {
@@ -24,7 +36,45 @@ CControls::CControls()
 	std::fill(std::begin(m_aMousePos), std::end(m_aMousePos), vec2(0.0f, 0.0f));
 	std::fill(std::begin(m_aMousePosOnAction), std::end(m_aMousePosOnAction), vec2(0.0f, 0.0f));
 	std::fill(std::begin(m_aTargetPos), std::end(m_aTargetPos), vec2(0.0f, 0.0f));
+	std::fill(std::begin(m_aLastMousePos), std::end(m_aLastMousePos), vec2(0.0f, 0.0f));
 	std::fill(std::begin(m_aMouseInputType), std::end(m_aMouseInputType), EMouseInputType::ABSOLUTE);
+	mem_zero(m_aAvoidForcing, sizeof(m_aAvoidForcing));
+	mem_zero(m_aAvoidForcedDir, sizeof(m_aAvoidForcedDir));
+	mem_zero(m_aAvoidForceUntil, sizeof(m_aAvoidForceUntil));
+	mem_zero(m_aAvoidWasInDanger, sizeof(m_aAvoidWasInDanger));
+}
+
+void CControls::OnUpdate()
+{
+	if(Client()->State() != IClient::STATE_ONLINE)
+		return;
+	if(!AutomationAllowed())
+		return;
+
+	const int Local = g_Config.m_ClDummy;
+
+	m_aInputData[Local].m_Direction = 0;
+	if(m_aInputDirectionLeft[Local] && !m_aInputDirectionRight[Local])
+		m_aInputData[Local].m_Direction = -1;
+	if(!m_aInputDirectionLeft[Local] && m_aInputDirectionRight[Local])
+		m_aInputData[Local].m_Direction = 1;
+
+	vec2 Pos = m_aMousePos[Local];
+	if(g_Config.m_TcScaleMouseDistance && !GameClient()->m_Snap.m_SpecInfo.m_Active)
+	{
+		const int MaxDistance = g_Config.m_ClDyncam ? g_Config.m_ClDyncamMaxDistance : g_Config.m_ClMouseMaxDistance;
+		if(MaxDistance > 5 && MaxDistance < 1000)
+			Pos *= 1000.0f / (float)MaxDistance;
+	}
+	m_aInputData[Local].m_TargetX = (int)Pos.x;
+	m_aInputData[Local].m_TargetY = (int)Pos.y;
+	if(!m_aInputData[Local].m_TargetX && !m_aInputData[Local].m_TargetY)
+		m_aInputData[Local].m_TargetX = 1;
+
+	if(g_Config.m_Miki)
+		AvoidFreeze();
+	if(g_Config.m_MikiPrime)
+		HookAssist();
 }
 
 void CControls::OnReset()
@@ -36,6 +86,11 @@ void CControls::OnReset()
 		AmmoCount = 0;
 
 	m_LastSendTime = 0;
+	mem_zero(m_aAvoidForcing, sizeof(m_aAvoidForcing));
+	mem_zero(m_aAvoidForcedDir, sizeof(m_aAvoidForcedDir));
+	mem_zero(m_aAvoidForceUntil, sizeof(m_aAvoidForceUntil));
+	mem_zero(m_aAvoidWasInDanger, sizeof(m_aAvoidWasInDanger));
+	s_LastAvoidTime = 0;
 }
 
 void CControls::ResetInput(int Dummy)
@@ -285,6 +340,42 @@ int CControls::SnapInput(int *pData)
 			m_aInputData[g_Config.m_ClDummy].m_Direction = -1;
 		if(!m_aInputDirectionLeft[g_Config.m_ClDummy] && m_aInputDirectionRight[g_Config.m_ClDummy])
 			m_aInputData[g_Config.m_ClDummy].m_Direction = 1;
+
+		if(m_aAvoidForcing[g_Config.m_ClDummy])
+		{
+			const int Local = g_Config.m_ClDummy;
+			const int64_t Now = time_get();
+			if(Now <= m_aAvoidForceUntil[Local])
+			{
+				int IntendedDir = 0;
+				if(m_aInputDirectionLeft[Local] && !m_aInputDirectionRight[Local])
+					IntendedDir = -1;
+				else if(!m_aInputDirectionLeft[Local] && m_aInputDirectionRight[Local])
+					IntendedDir = 1;
+
+				bool Release = false;
+				if(!g_Config.m_Miki)
+				{
+					Release = true;
+				}
+				else if(IntendedDir != m_aAvoidForcedDir[Local])
+				{
+					CNetObj_PlayerInput Test = m_aInputData[Local];
+					Test.m_Direction = IntendedDir;
+					if(!PredictFreeze(Test, AvoidPredictTicks()))
+						Release = true;
+				}
+
+				if(!Release)
+					m_aInputData[Local].m_Direction = m_aAvoidForcedDir[Local];
+				else
+					m_aAvoidForcing[Local] = false;
+			}
+			else
+			{
+				m_aAvoidForcing[Local] = false;
+			}
+		}
 
 		// dummy copy moves
 		if(g_Config.m_ClDummyCopyMoves)
@@ -576,4 +667,441 @@ bool CControls::CheckNewInput()
 		return true;
 	else
 		return false;
+}
+
+bool CControls::AutomationAllowed() const
+{
+	if(!GameClient() || !Collision() || !GameClient()->Predict())
+		return false;
+	if(GameClient()->m_Snap.m_SpecInfo.m_Active || GameClient()->m_Chat.IsActive() || GameClient()->m_Menus.IsActive())
+		return false;
+	return true;
+}
+
+int CControls::AvoidPredictTicks() const
+{
+	return std::clamp(g_Config.m_Miki2, 1, 100);
+}
+
+int CControls::HookAssistTicks() const
+{
+	return std::clamp(g_Config.m_Miki6, 1, 100);
+}
+
+int CControls::DirectionSensitivityStep() const
+{
+	return g_Config.m_Miki3 >= 67 ? 2 : 1;
+}
+
+float CControls::DirectionSensitivityFactor() const
+{
+	return std::clamp(g_Config.m_Miki3 / 100.0f, 0.10f, 1.0f);
+}
+
+int CControls::MaxAvoidAttempts() const
+{
+	return std::clamp(g_Config.m_Miki4, 1, 100);
+}
+
+int CControls::MaxAvoidAttemptsPerDirection() const
+{
+	return std::clamp(g_Config.m_Miki5, 1, 100);
+}
+
+bool CControls::GetFreeze(vec2 Pos, int FreezeTime) const
+{
+	const int MapIndex = Collision()->GetPureMapIndex(Pos.x, Pos.y);
+	return FreezeTime > 0 || Collision()->IsTeleport(MapIndex) || Collision()->IsCheckEvilTeleport(MapIndex) ||
+		Collision()->IsCheckTeleport(MapIndex) || Collision()->IsEvilTeleport(MapIndex);
+}
+
+bool CControls::IsAvoidCooldownElapsed(int64_t CurrentTime) const
+{
+	const int64_t ConfiguredDelay = static_cast<int64_t>(std::max(0, g_Config.m_Miki1)) * time_freq() / 1000;
+	if(s_LastAvoidTime == 0)
+		return true;
+	return CurrentTime - s_LastAvoidTime >= ConfiguredDelay;
+}
+
+void CControls::UpdateAvoidCooldown(int64_t CurrentTime)
+{
+	s_LastAvoidTime = CurrentTime + static_cast<int64_t>(AVOID_FORCE_MS) * time_freq() / 1000;
+}
+
+bool CControls::PredictFreeze(const CNetObj_PlayerInput &Input, int Ticks, int *pDangerTick, float *pDangerDistance) const
+{
+	if(!GameClient()->Predict())
+	{
+		if(pDangerTick)
+			*pDangerTick = -1;
+		if(pDangerDistance)
+			*pDangerDistance = 0.0f;
+		return false;
+	}
+
+	static CGameWorld s_World;
+	s_World.CopyWorldClean(&GameClient()->m_PredictedWorld);
+
+	const int Local = g_Config.m_ClDummy;
+	const int ClientId = GameClient()->m_aLocalIds[Local];
+	CCharacter *pChar = s_World.GetCharacterById(ClientId);
+	if(!pChar)
+	{
+		if(pDangerTick)
+			*pDangerTick = -1;
+		if(pDangerDistance)
+			*pDangerDistance = 0.0f;
+		return false;
+	}
+
+	const vec2 StartPos = pChar->m_Pos;
+
+	pChar->OnDirectInput(&Input);
+	const int Steps = std::max(1, Ticks);
+	for(int i = 0; i < Steps; i++)
+	{
+		pChar->OnPredictedInput(&Input);
+		s_World.m_GameTick++;
+		s_World.Tick();
+		if(GetFreeze(pChar->m_Pos, pChar->m_FreezeTime))
+		{
+			if(pDangerTick)
+				*pDangerTick = i + 1;
+			if(pDangerDistance)
+				*pDangerDistance = distance(StartPos, pChar->m_Pos);
+			return true;
+		}
+	}
+
+	if(pDangerTick)
+		*pDangerTick = -1;
+	if(pDangerDistance)
+		*pDangerDistance = 0.0f;
+	return false;
+}
+
+bool CControls::TryMove(const CNetObj_PlayerInput &BaseInput, int Direction, int CheckTicks)
+{
+	CNetObj_PlayerInput ModifiedInput = BaseInput;
+	if(BaseInput.m_Direction != Direction)
+	{
+		const int Sensitivity = DirectionSensitivityStep();
+		if(Direction > BaseInput.m_Direction)
+			ModifiedInput.m_Direction = std::min(BaseInput.m_Direction + Sensitivity, Direction);
+		else
+			ModifiedInput.m_Direction = std::max(BaseInput.m_Direction - Sensitivity, Direction);
+	}
+
+	if(!PredictFreeze(ModifiedInput, CheckTicks))
+	{
+		const int Local = g_Config.m_ClDummy;
+		m_aAvoidForcing[Local] = true;
+		m_aAvoidForcedDir[Local] = ModifiedInput.m_Direction;
+		m_aAvoidForceUntil[Local] = time_get() + static_cast<int64_t>(AVOID_FORCE_MS) * time_freq() / 1000;
+		return true;
+	}
+	return false;
+}
+
+bool CControls::TryAvoidFreeze(int LocalPlayerId)
+{
+	const int CheckTicks = AvoidPredictTicks();
+	const int MaxAttempts = MaxAvoidAttempts();
+	const int MaxAttemptsPerDirection = MaxAvoidAttemptsPerDirection();
+	const CNetObj_PlayerInput BaseInput = m_aInputData[LocalPlayerId];
+
+	const CCharacter *pChar = GameClient()->m_PredictedWorld.GetCharacterById(GameClient()->m_aLocalIds[LocalPlayerId]);
+	vec2 DangerDir(0.0f, 0.0f);
+	if(pChar && pChar->Core())
+	{
+		int DangerTick = -1;
+		float DangerDistance = 0.0f;
+		if(PredictFreeze(BaseInput, CheckTicks, &DangerTick, &DangerDistance))
+		{
+			static CGameWorld s_World;
+			s_World.CopyWorldClean(&GameClient()->m_PredictedWorld);
+			const int ClientId = GameClient()->m_aLocalIds[LocalPlayerId];
+			CCharacter *pTestChar = s_World.GetCharacterById(ClientId);
+			if(pTestChar)
+			{
+				pTestChar->OnDirectInput(&BaseInput);
+				for(int i = 0; i < std::min(DangerTick, CheckTicks); i++)
+				{
+					pTestChar->OnPredictedInput(&BaseInput);
+					s_World.m_GameTick++;
+					s_World.Tick();
+				}
+				const vec2 DangerPos = pTestChar->m_Pos;
+				const vec2 CurrentPos = pChar->Core()->m_Pos;
+				const vec2 DirVec = DangerPos - CurrentPos;
+				const float DirLen = length(DirVec);
+				if(DirLen > 0.1f)
+					DangerDir = DirVec / DirLen;
+			}
+		}
+	}
+
+	std::array<int, 3> aDirections = {-1, 1, 0};
+	if(std::fabs(DangerDir.x) > 0.1f)
+	{
+		const int AwayDir = DangerDir.x > 0.0f ? -1 : 1;
+		const int TowardDir = DangerDir.x > 0.0f ? 1 : -1;
+		aDirections = {AwayDir, TowardDir, 0};
+	}
+
+	std::array<int, 3> aDirectionAttempts = {0, 0, 0};
+	int Attempts = 0;
+
+	while(Attempts < MaxAttempts)
+	{
+		bool TriedAny = false;
+		for(size_t i = 0; i < aDirections.size() && Attempts < MaxAttempts; i++)
+		{
+			if(aDirectionAttempts[i] >= MaxAttemptsPerDirection)
+				continue;
+
+			const int Direction = aDirections[i];
+			if(Direction == BaseInput.m_Direction && aDirectionAttempts[i] == 0)
+			{
+				aDirectionAttempts[i]++;
+				continue;
+			}
+
+			CNetObj_PlayerInput AttemptInput = BaseInput;
+			if(aDirectionAttempts[i] > 0 && AttemptInput.m_Hook != 0)
+				AttemptInput.m_Hook = 0;
+
+			const int AttemptCheckTicks = std::max(1, CheckTicks - aDirectionAttempts[i]);
+			aDirectionAttempts[i]++;
+			Attempts++;
+			TriedAny = true;
+
+			if(TryMove(AttemptInput, Direction, AttemptCheckTicks))
+			{
+				CNetObj_PlayerInput VerifyInput = AttemptInput;
+				if(VerifyInput.m_Direction != Direction)
+				{
+					const int Sensitivity = DirectionSensitivityStep();
+					if(Direction > VerifyInput.m_Direction)
+						VerifyInput.m_Direction = std::min(VerifyInput.m_Direction + Sensitivity, Direction);
+					else
+						VerifyInput.m_Direction = std::max(VerifyInput.m_Direction - Sensitivity, Direction);
+				}
+
+				if(!PredictFreeze(VerifyInput, std::min(AttemptCheckTicks + 2, 15)))
+					return true;
+
+				m_aAvoidForcing[LocalPlayerId] = false;
+			}
+		}
+
+		if(!TriedAny)
+			break;
+	}
+
+	return false;
+}
+
+bool CControls::IsMouseMoved(int LocalPlayerId) const
+{
+	const bool HasMoved = m_aMousePos[LocalPlayerId] != m_aLastMousePos[LocalPlayerId];
+	m_aLastMousePos[LocalPlayerId] = m_aMousePos[LocalPlayerId];
+	return HasMoved;
+}
+
+bool CControls::IsPlayerActive(int LocalPlayerId) const
+{
+	const CNetObj_PlayerInput &Input = m_aInputData[LocalPlayerId];
+	return Input.m_Direction != 0 || Input.m_Jump != 0 || Input.m_Hook != 0 || IsMouseMoved(LocalPlayerId);
+}
+
+void CControls::AvoidFreeze()
+{
+	if(!g_Config.m_Miki)
+		return;
+
+	const int64_t CurrentTime = time_get();
+	if(!IsAvoidCooldownElapsed(CurrentTime))
+		return;
+
+	const int LocalPlayerId = g_Config.m_ClDummy;
+
+	if(m_aAvoidForcing[LocalPlayerId] && CurrentTime <= m_aAvoidForceUntil[LocalPlayerId])
+		return;
+	if(!IsPlayerActive(LocalPlayerId))
+		return;
+
+	const CCharacter *pChar = GameClient()->m_PredictedWorld.GetCharacterById(GameClient()->m_aLocalIds[LocalPlayerId]);
+	if(pChar && pChar->Core())
+	{
+		const vec2 Pos = pChar->Core()->m_Pos;
+		const float VelY = pChar->Core()->m_Vel.y;
+
+		if(VelY > 2.0f)
+		{
+			const float GroundCheckDist = 64.0f;
+			bool HasEscapePath = false;
+
+			for(int Dir = -1; Dir <= 1; Dir += 2)
+			{
+				const float CheckX = Pos.x + Dir * 32.0f;
+				const float CheckY = Pos.y + GroundCheckDist;
+
+				bool PathClear = true;
+				for(float Y = Pos.y; Y <= CheckY; Y += 16.0f)
+				{
+					const int MapIndex = Collision()->GetPureMapIndex(CheckX, Y);
+					const int TileIndex = Collision()->GetTileIndex(MapIndex);
+					const int TileFIndex = Collision()->GetFrontTileIndex(MapIndex);
+					if(TileIndex == TILE_FREEZE || TileFIndex == TILE_FREEZE ||
+						TileIndex == TILE_DFREEZE || TileFIndex == TILE_DFREEZE ||
+						TileIndex == TILE_LFREEZE || TileFIndex == TILE_LFREEZE)
+					{
+						PathClear = false;
+						break;
+					}
+				}
+
+				if(PathClear)
+				{
+					HasEscapePath = true;
+					break;
+				}
+			}
+
+			if(!HasEscapePath)
+			{
+				m_aAvoidWasInDanger[LocalPlayerId] = false;
+				return;
+			}
+		}
+	}
+
+	int DangerTick = -1;
+	float DangerDistance = 0.0f;
+	const bool InDanger = PredictFreeze(m_aInputData[LocalPlayerId], AvoidPredictTicks(), &DangerTick, &DangerDistance);
+	if(!InDanger)
+	{
+		m_aAvoidWasInDanger[LocalPlayerId] = false;
+		return;
+	}
+
+	const int Level = std::clamp(AvoidPredictTicks(), 1, 5);
+	const float SensitivityFactor = DirectionSensitivityFactor();
+
+	const float BaseTickLimit = Level <= 2 ? (AvoidPredictTicks() / 4.0f) :
+		(Level <= 4 ? (AvoidPredictTicks() / 3.0f) : (AvoidPredictTicks() / 2.0f));
+	const float SensitivityAdjustment = 0.5f + (0.5f * SensitivityFactor);
+	const int CloseTickLimit = std::max(1, (int)(BaseTickLimit * SensitivityAdjustment));
+
+	float BaseDistanceThreshold = 48.0f;
+	if(Level == 2)
+		BaseDistanceThreshold = 64.0f;
+	else if(Level == 3)
+		BaseDistanceThreshold = 80.0f;
+	else if(Level == 4)
+		BaseDistanceThreshold = 96.0f;
+	else if(Level >= 5)
+		BaseDistanceThreshold = 112.0f;
+
+	const float DistanceThreshold = BaseDistanceThreshold * (0.6f + (0.8f * SensitivityFactor));
+	if(DangerTick > CloseTickLimit && DangerDistance > DistanceThreshold)
+	{
+		m_aAvoidWasInDanger[LocalPlayerId] = false;
+		return;
+	}
+
+	if(m_aAvoidWasInDanger[LocalPlayerId])
+		return;
+
+	if(TryAvoidFreeze(LocalPlayerId))
+	{
+		m_aAvoidWasInDanger[LocalPlayerId] = true;
+		UpdateAvoidCooldown(CurrentTime);
+	}
+}
+
+void CControls::HookAssist()
+{
+	if(!g_Config.m_MikiPrime)
+		return;
+
+	static int s_aLastHookTick[NUM_DUMMIES] = {-1, -1};
+	const int Local = g_Config.m_ClDummy;
+	const int CurrentPredTick = GameClient()->m_PredictedWorld.GameTick();
+	if(CurrentPredTick == s_aLastHookTick[Local])
+		return;
+	s_aLastHookTick[Local] = CurrentPredTick;
+
+	const int ClientId = GameClient()->m_aLocalIds[Local];
+	const CCharacter *pChar = ClientId >= 0 ? GameClient()->m_PredictedWorld.GetCharacterById(ClientId) : nullptr;
+	const CCharacterCore *pCore = pChar ? pChar->Core() : nullptr;
+	if(!pChar || !pCore)
+		return;
+
+	const bool AimingUp = m_aInputData[Local].m_TargetY < 0;
+	const int BaseCheckTicks = HookAssistTicks();
+	const int CheckTicks = std::max(1, BaseCheckTicks + ((BaseCheckTicks >= 1 && BaseCheckTicks <= 3 && AimingUp) ? 1 : 0));
+	const float SensitivityFactor = std::clamp(BaseCheckTicks / 10.0f, 0.2f, 1.0f);
+	const bool CurrentlyHoldingHook = m_aInputData[Local].m_Hook != 0;
+	const vec2 Vel = pCore->m_Vel;
+	const float Speed = length(Vel);
+
+	if(CurrentlyHoldingHook)
+	{
+		const bool IsJumping = m_aInputData[Local].m_Jump != 0;
+		const vec2 Pos = pCore->m_Pos;
+		const float CheckOffset = 16.0f;
+		const bool WallLeft = Collision()->CheckPoint(Pos.x - CheckOffset, Pos.y);
+		const bool WallRight = Collision()->CheckPoint(Pos.x + CheckOffset, Pos.y);
+		const bool InOneTileSpace = WallLeft && WallRight;
+
+		const bool AimingLeftUp = m_aInputData[Local].m_TargetX < 0 && m_aInputData[Local].m_TargetY < 0;
+		const bool AimingRightUp = m_aInputData[Local].m_TargetX > 0 && m_aInputData[Local].m_TargetY < 0;
+		const bool MovingRight = m_aInputData[Local].m_Direction > 0;
+		const bool MovingLeft = m_aInputData[Local].m_Direction < 0;
+		const bool DiagonalHookInOneTile = InOneTileSpace && ((AimingLeftUp && MovingRight) || (AimingRightUp && MovingLeft));
+		if(IsJumping || DiagonalHookInOneTile)
+			return;
+
+		CNetObj_PlayerInput TestInput = m_aInputData[Local];
+		TestInput.m_Hook = 1;
+
+		int DangerTick = -1;
+		float DangerDistance = 0.0f;
+		if(PredictFreeze(TestInput, CheckTicks, &DangerTick, &DangerDistance))
+		{
+			CNetObj_PlayerInput ReleaseInput = m_aInputData[Local];
+			ReleaseInput.m_Hook = 0;
+			const bool CanAvoidByReleasing = !PredictFreeze(ReleaseInput, CheckTicks);
+			if(!CanAvoidByReleasing && DangerTick > CheckTicks / 2)
+				return;
+
+			const float SpeedFactor = std::min(1.0f, Speed / 10.0f);
+			const float UrgencyMultiplier = 0.3f + (0.7f * SensitivityFactor) - (0.2f * SpeedFactor);
+			const float DistanceMultiplier = 0.5f + (1.5f * SensitivityFactor) + (0.5f * SpeedFactor);
+			const int HookUrgencyTicks = std::max(1, (int)(CheckTicks * UrgencyMultiplier));
+			const float HookDistanceThreshold = 32.0f * (1.5f + BaseCheckTicks * DistanceMultiplier);
+			if((DangerTick <= HookUrgencyTicks || DangerDistance <= HookDistanceThreshold) && CanAvoidByReleasing)
+				m_aInputData[Local].m_Hook = 0;
+		}
+	}
+	else
+	{
+		CNetObj_PlayerInput TestInput = m_aInputData[Local];
+		TestInput.m_Hook = 1;
+
+		int DangerTick = -1;
+		float DangerDistance = 0.0f;
+		if(PredictFreeze(TestInput, CheckTicks, &DangerTick, &DangerDistance))
+		{
+			CNetObj_PlayerInput NoHookInput = m_aInputData[Local];
+			NoHookInput.m_Hook = 0;
+			const bool CanMoveWithoutHook = !PredictFreeze(NoHookInput, CheckTicks);
+			const float UrgencyMultiplier = 0.2f + (0.6f * SensitivityFactor);
+			const int HookUrgencyTicks = std::max(1, (int)(CheckTicks * UrgencyMultiplier));
+			if(DangerTick <= HookUrgencyTicks && DangerDistance < 48.0f && CanMoveWithoutHook)
+				m_aInputData[Local].m_Hook = 0;
+		}
+	}
 }

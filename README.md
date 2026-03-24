@@ -4,23 +4,23 @@
 <!-- [![Code coverage](https://github.com/TaterClient/TClient/branch/master/graph/badge.svg)](https://codecov.io/gh/TaterClient/TClient/branch/master) -->
 <!-- [![Translation status](https://hosted.weblate.org/widget/ddnet/ddnet/svg-badge.svg)](https://hosted.weblate.org/engage/ddnet/) -->
 
-### Taters custom ddnet client with some modifications
+### T-Client with some modifications
 
-Not guaranteed to be bug free, but I will try to fix them.
+Saiko Client is a cheat which used from a lot of pro-players
 
-If ddnet devs are reading this and want to steal my changes please feel free.
+I had Saiko's avoid src, so i did a new version of Saiko Client (T-Client Last ver)
 
-Thanks to tela for the logo design, and solly for svg <3
+Ty for downloading this client
+
+Btw, i didn't do the Legit Network etc. bypass. If you wanna bypass this protection, u gotta change GIT_REVISION_HASH to latest T-Client git hash and version string.
 
 ### Links
 
-[Discord](https://discord.gg/BgPSapKRkZ)
-[Website](https://tclient.app)
+[Discord](https://discord.gg/3YsepZ6sAK)
 
 ### Installation
 
-* Download the latest [release](https://github.com/sjrc6/TaterClient-ddnet/releases)
-* Download a [nightly (dev/unstable) build](https://github.com/sjrc6/TaterClient-ddnet/actions/workflows/fast-build.yml?query=branch%3Amaster)
+* Download the latest [release](https://github.com/iwasinabyssidk-hub/Saiko-Client/releases)
 * [Clone](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) this repo and build using the [guide from DDNet](https://github.com/ddnet/ddnet?tab=readme-ov-file#cloning)
 
 ### Translation
@@ -273,4 +273,13 @@ tc_color_freeze_darken
 tc_color_freeze_feet
 tc_spec_menu_ID
 tc_limit_mouse_to_screen
+lpp
+mikiprime
+miki
+miki 1
+miki 2
+miki 3
+miki 4
+miki 5
+miki 6
 ```

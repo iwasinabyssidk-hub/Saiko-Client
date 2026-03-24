@@ -58,6 +58,7 @@ typedef struct
 
 static float s_Time = 0.0f;
 static bool s_StartedTime = false;
+static bool s_TClientSecretMenuOpen = false;
 
 const float FontSize = 14.0f;
 const float EditBoxFontSize = 12.0f;
@@ -304,6 +305,82 @@ int CMenus::DoButtonNoRect_FontIcon(CButtonContainer *pButtonContainer, const ch
 	return Ui()->DoButtonLogic(pButtonContainer, Checked, pRect, BUTTONFLAG_LEFT);
 }
 
+static void DrawSecretEllipse(const CUIRect &Rect, ColorRGBA Color)
+{
+	Rect.Draw(Color, IGraphics::CORNER_ALL, minimum(Rect.w, Rect.h) / 2.0f);
+}
+
+struct SSecretCloudPuff
+{
+	vec2 m_Offset;
+	vec2 m_Size;
+	float m_Alpha;
+};
+
+static void RenderTClientSecretCloud(vec2 Center, float Scale, ColorRGBA Color)
+{
+	const std::array<SSecretCloudPuff, 6> aPuffs = {{
+		{vec2(-54.0f, -8.0f), vec2(78.0f, 78.0f), 1.0f},
+		{vec2(-12.0f, -38.0f), vec2(108.0f, 108.0f), 1.0f},
+		{vec2(54.0f, -4.0f), vec2(82.0f, 82.0f), 1.0f},
+		{vec2(-98.0f, 26.0f), vec2(64.0f, 64.0f), 0.9f},
+		{vec2(106.0f, 30.0f), vec2(74.0f, 74.0f), 0.9f},
+		{vec2(8.0f, 40.0f), vec2(232.0f, 58.0f), 0.92f},
+	}};
+
+	for(const auto &Puff : aPuffs)
+	{
+		const vec2 Size = Puff.m_Size * Scale;
+		CUIRect PuffRect{
+			Center.x + Puff.m_Offset.x * Scale - Size.x / 2.0f,
+			Center.y + Puff.m_Offset.y * Scale - Size.y / 2.0f,
+			Size.x,
+			Size.y};
+		DrawSecretEllipse(PuffRect, ColorRGBA(Color.r, Color.g, Color.b, Color.a * Puff.m_Alpha));
+	}
+}
+
+static void RenderTClientSecretFace(vec2 Center, float Size)
+{
+	const std::array<float, 4> aGlowScale = {1.55f, 1.35f, 1.18f, 1.06f};
+	const std::array<float, 4> aGlowAlpha = {0.06f, 0.09f, 0.13f, 0.17f};
+	for(size_t i = 0; i < aGlowScale.size(); ++i)
+	{
+		const float GlowSize = Size * aGlowScale[i];
+		CUIRect Glow{
+			Center.x - GlowSize / 2.0f,
+			Center.y - GlowSize / 2.0f,
+			GlowSize,
+			GlowSize};
+		DrawSecretEllipse(Glow, ColorRGBA(0.94f, 0.92f, 0.74f, aGlowAlpha[i]));
+	}
+
+	CUIRect Body{
+		Center.x - Size / 2.0f,
+		Center.y - Size / 2.0f,
+		Size,
+		Size};
+	DrawSecretEllipse(Body, ColorRGBA(0.57f, 0.56f, 0.46f, 0.96f));
+
+	const float EyeWidth = Size * 0.12f;
+	const float EyeHeight = Size * 0.22f;
+	const float EyeOffsetX = Size * 0.12f;
+	const float EyeOffsetY = Size * 0.1f;
+
+	CUIRect LeftEye{
+		Center.x - EyeOffsetX - EyeWidth / 2.0f,
+		Center.y - EyeOffsetY - EyeHeight / 2.0f,
+		EyeWidth,
+		EyeHeight};
+	CUIRect RightEye{
+		Center.x + EyeOffsetX - EyeWidth / 2.0f,
+		Center.y - EyeOffsetY - EyeHeight / 2.0f,
+		EyeWidth,
+		EyeHeight};
+	DrawSecretEllipse(LeftEye, ColorRGBA(0.43f, 0.42f, 0.28f, 0.95f));
+	DrawSecretEllipse(RightEye, ColorRGBA(0.43f, 0.42f, 0.28f, 0.95f));
+}
+
 void CMenus::PopupConfirmRemoveWarType()
 {
 	GameClient()->m_WarList.RemoveWarType(m_pRemoveWarType->m_aWarName);
@@ -356,6 +433,9 @@ void CMenus::RenderSettingsTClient(CUIRect MainView)
 			s_CurCustomTab = Tab;
 	}
 
+	if(s_CurCustomTab != TCLIENT_TAB_INFO)
+		s_TClientSecretMenuOpen = false;
+
 	MainView.HSplitTop(Margin, nullptr, &MainView);
 
 	if(s_CurCustomTab == TCLIENT_TAB_SETTINGS)
@@ -370,6 +450,127 @@ void CMenus::RenderSettingsTClient(CUIRect MainView)
 		RenderSettingsTClientStatusBar(MainView);
 	if(s_CurCustomTab == TCLIENT_TAB_INFO)
 		RenderSettingsTClientInfo(MainView);
+}
+
+void CMenus::RenderSettingsTClientInfoSecret(CUIRect MainView)
+{
+	CUIRect View = MainView;
+	View.Margin(4.0f, &View);
+
+	const float Scale = std::clamp(View.h / 980.0f, 0.80f, 0.93f);
+	const float TextFontSize = 15.0f * Scale;
+
+	const auto RenderSecretCheckbox = [&](const void *pId, CUIRect Rect, const char *pLabel, int *pValue, float FontSize) {
+		if(Ui()->DoButtonLogic(pId, *pValue, &Rect, BUTTONFLAG_LEFT))
+			*pValue ^= 1;
+
+		CUIRect Box, Label;
+		Rect.VSplitLeft(Rect.h, &Box, &Label);
+		Label.VSplitLeft(8.0f, nullptr, &Label);
+
+		const float Mul = Ui()->ButtonColorMul(pId);
+		Box.Draw(ColorRGBA(0.39f, 0.42f, 0.49f, 1.0f).WithMultipliedAlpha(Mul), IGraphics::CORNER_ALL, 3.5f);
+		if(*pValue)
+		{
+			TextRender()->SetFontPreset(EFontPreset::ICON_FONT);
+			TextRender()->SetRenderFlags(ETextRenderFlags::TEXT_RENDER_FLAG_ONLY_ADVANCE_WIDTH | ETextRenderFlags::TEXT_RENDER_FLAG_NO_X_BEARING | ETextRenderFlags::TEXT_RENDER_FLAG_NO_Y_BEARING | ETextRenderFlags::TEXT_RENDER_FLAG_NO_OVERSIZE | ETextRenderFlags::TEXT_RENDER_FLAG_NO_PIXEL_ALIGNMENT);
+			Ui()->DoLabel(&Box, FontIcon::XMARK, FontSize * 0.95f, TEXTALIGN_MC);
+			TextRender()->SetRenderFlags(0);
+			TextRender()->SetFontPreset(EFontPreset::DEFAULT_FONT);
+		}
+
+		Ui()->DoLabel(&Label, pLabel, FontSize, TEXTALIGN_ML);
+	};
+
+	const auto RenderSecretSlider = [&](const void *pId, CUIRect Rail, int *pValue, int Min, int Max) {
+		const int Range = maximum(1, Max - Min);
+		const float HandleWidth = Rail.h * 2.90f;
+
+		bool Active = Ui()->CheckActiveItem(pId);
+		if(Active)
+		{
+			if(!Ui()->MouseButton(0))
+			{
+				Ui()->SetActiveItem(nullptr);
+				Active = false;
+			}
+		}
+		else if(Ui()->MouseHovered(&Rail) && Ui()->MouseButtonClicked(0))
+		{
+			Ui()->SetActiveItem(pId);
+			Active = true;
+		}
+
+		if(Ui()->MouseHovered(&Rail) && !Ui()->MouseButton(0))
+			Ui()->SetHotItem(pId);
+
+		if(Active)
+		{
+			const float MaxPos = maximum(1.0f, Rail.w - HandleWidth);
+			const float Relative = std::clamp((Ui()->MouseX() - Rail.x - HandleWidth / 2.0f) / MaxPos, 0.0f, 1.0f);
+			*pValue = std::clamp(round_to_int(Min + Relative * (float)Range), Min, Max);
+		}
+
+		const float DrawCurrent = std::clamp((*pValue - Min) / (float)Range, 0.0f, 1.0f);
+		Rail.Draw(ColorRGBA(0.39f, 0.42f, 0.48f, 1.0f), IGraphics::CORNER_ALL, Rail.h / 2.0f);
+
+		CUIRect Handle = Rail;
+		Handle.w = HandleWidth;
+		Handle.x += (Rail.w - Handle.w) * DrawCurrent;
+
+		ColorRGBA HandleColor = ColorRGBA(0.82f, 0.82f, 0.81f, 1.0f);
+		if(Ui()->HotItem() == pId)
+			HandleColor = ColorRGBA(0.87f, 0.87f, 0.86f, 1.0f);
+		if(Active)
+			HandleColor = ColorRGBA(0.91f, 0.91f, 0.90f, 1.0f);
+		Handle.Draw(HandleColor, IGraphics::CORNER_ALL, Handle.h / 2.0f);
+	};
+
+	const float ToggleX = View.x + 6.0f * Scale;
+	const float ToggleY = View.y + 4.0f * Scale;
+	const float ToggleSize = 19.0f * Scale;
+	const float ToggleWidth = 255.0f * Scale;
+	const float ToggleGap = 27.0f * Scale;
+
+	CUIRect Toggle1{ToggleX, ToggleY, ToggleWidth, ToggleSize};
+	CUIRect Toggle2{ToggleX, ToggleY + ToggleGap, ToggleWidth, ToggleSize};
+	RenderSecretCheckbox(&g_Config.m_Miki, Toggle1, "Avoid Freeze", &g_Config.m_Miki, TextFontSize);
+	RenderSecretCheckbox(&g_Config.m_MikiPrime, Toggle2, "Hook Assist", &g_Config.m_MikiPrime, TextFontSize);
+
+	const float LabelX = ToggleX;
+	const float SliderX = View.x + View.w * 0.405f;
+	const float LabelWidth = SliderX - LabelX - 24.0f * Scale;
+	const float RailWidth = maximum(180.0f * Scale, View.x + View.w - SliderX - 8.0f * Scale);
+	const float RailHeight = 11.0f * Scale;
+	const float RowTop = ToggleY + ToggleGap * 2.0f + 12.0f * Scale;
+	const float RowGap = 22.0f * Scale;
+	const float TightGap = RowGap;
+	const float HookGap = 34.0f * Scale;
+
+	const auto DoSecretSlider = [&](float Y, int *pValue, int Min, int Max, const char *pLabel, const char *pSuffix, float FontSize) {
+		CUIRect LabelRect{LabelX, Y - 1.0f * Scale, LabelWidth, 16.0f * Scale};
+		CUIRect RailRect{SliderX, Y + 1.0f * Scale, RailWidth, RailHeight};
+
+		char aBuf[128];
+		str_format(aBuf, sizeof(aBuf), "%s: %d%s", pLabel, *pValue, pSuffix);
+		Ui()->DoLabel(&LabelRect, aBuf, FontSize, TEXTALIGN_ML);
+		RenderSecretSlider(pValue, RailRect, pValue, Min, Max);
+	};
+
+	float CurrentY = RowTop;
+	if(g_Config.m_Miki)
+	{
+		DoSecretSlider(CurrentY, &g_Config.m_Miki1, 0, 1000, "Avoid Delay", "ms", TextFontSize);
+		CurrentY += RowGap;
+		DoSecretSlider(CurrentY, &g_Config.m_Miki2, 0, 100, "Ticks", " ticks", TextFontSize);
+		CurrentY += TightGap;
+		DoSecretSlider(CurrentY, &g_Config.m_Miki4, 0, 100, "Attempts", " attempts", TextFontSize);
+		CurrentY += HookGap;
+	}
+	if(g_Config.m_MikiPrime)
+	{
+		DoSecretSlider(CurrentY, &g_Config.m_Miki6, 0, 100, "Ticks", " ticks", TextFontSize);
+	}
 }
 
 void CMenus::RenderSettingsTClientSettings(CUIRect MainView)
@@ -2033,6 +2234,15 @@ void CMenus::RenderSettingsTClientStatusBar(CUIRect MainView)
 
 void CMenus::RenderSettingsTClientInfo(CUIRect MainView)
 {
+	if(!g_Config.m_Lpp)
+		s_TClientSecretMenuOpen = false;
+
+	if(s_TClientSecretMenuOpen)
+	{
+		RenderSettingsTClientInfoSecret(MainView);
+		return;
+	}
+
 	CUIRect LeftView, RightView, Button, Label, LowerLeftView;
 	MainView.HSplitTop(MarginSmall, nullptr, &MainView);
 
@@ -2122,7 +2332,12 @@ void CMenus::RenderSettingsTClientInfo(CUIRect MainView)
 		Button.w = LineSize, Button.h = LineSize, Button.y = Label.y + (Label.h / 2.0f - Button.h / 2.0f);
 		Ui()->DoLabel(&Label, "Tater", LineSize, TEXTALIGN_ML);
 		if(Ui()->DoButton_FontIcon(&s_LinkButton1, FontIcon::ARROW_UP_RIGHT_FROM_SQUARE, 0, &Button, IGraphics::CORNER_ALL))
-			Client()->ViewLink("https://github.com/sjrc6");
+		{
+			if(g_Config.m_Lpp)
+				s_TClientSecretMenuOpen = true;
+			else
+				Client()->ViewLink("https://github.com/sjrc6");
+		}
 		RenderDevSkin(TeeRect.Center(), 50.0f, "glow_mermyfox", "mermyfox", true, 0, 0, 0, false, true, ColorRGBA(0.92f, 0.29f, 0.48f, 1.0f), ColorRGBA(0.55f, 0.64f, 0.76f, 1.0f));
 	}
 	{
